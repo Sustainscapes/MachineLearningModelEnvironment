@@ -1,0 +1,62 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  cache = T
+)
+```
+
+# MachineLearningModelEnvironment
+
+<!-- badges: start -->
+<!-- badges: end -->
+
+The goal of MachineLearningModelEnvironment is to use the Novana Dataset, together with climatic and soil data in order to predict the potential Species Richness, one star species richness and the Arstcore for all of Denmark assuming that the whole country is tranformed into one of the major habitats. 
+
+
+## Generation of the training dataset
+
+In order to arrange this we will need the following packages:
+
+```{r PackageLoad, echo=TRUE, message=F, error=F, warning=F}
+library(tidyverse)
+library(sf)
+library(DT)
+library(terra)
+library(knitr)
+```
+
+First we will use points from the NOVANA dataset
+
+```{r}
+Habs <- read_rds("AllData4.rds") %>%
+  dplyr::filter(Dataset == "Novana") %>%
+  separate(col = "ID", into = c("ID", "plot")) %>%
+  dplyr::select("plot", "ID", "Dataset","habtype",
+                "MajorHab") %>% dplyr::filter(!is.na(MajorHab)) 
+```
+There are`r nrow(Habs)` plots, in the following table we can se the number of plots per each type of habitat:
+
+```{r, echo = T}
+Habs %>% 
+  as.data.frame() %>% 
+  group_by(MajorHab) %>% 
+  summarise(number_of_plots = n()) %>% 
+  arrange(desc(number_of_plots)) %>% 
+  knitr::kable(caption = "Number of plots per major habitat in descending order")
+```
+
+
+
+## Reproducibility ticket:
+
+```{r, echo = FALSE}
+devtools::session_info()
+```
+

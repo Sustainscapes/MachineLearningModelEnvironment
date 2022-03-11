@@ -35,17 +35,8 @@ Habs <- read_rds("AllData4.rds") %>%
 #> Warning: Expected 2 pieces. Additional pieces discarded in 1 rows [1].
 ```
 
-There are44532 plots, in the following table we can se the number of
+There are 44532 plots, in the following table we can se the number of
 plots per each type of habitat:
-
-``` r
-Habs %>% 
-  as.data.frame() %>% 
-  group_by(MajorHab) %>% 
-  summarise(number_of_plots = n()) %>% 
-  arrange(desc(number_of_plots)) %>% 
-  knitr::kable(caption = "Number of plots per major habitat in descending order")
-```
 
 | MajorHab | number\_of\_plots |
 |:---------|------------------:|
@@ -70,6 +61,29 @@ Habs %>%
 | 32       |                 1 |
 
 Number of plots per major habitat in descending order
+
+``` r
+Species <- read_csv("Novana/alledata-abiotiske2.csv") %>% dplyr::select("site", "plot", "year", "antalarter", "antalstjernearter", "antaltostjernearter",
+  "antalenaarigearter", "meanscore", "andelstjerne", "andeltostjerne") %>%
+  dplyr::filter(plot %in% Habs$plot) %>%
+  mutate(plot = as.character(plot), site = as.character(site))
+#> Warning: One or more parsing issues, see `problems()` for details
+#> Rows: 97560 Columns: 97
+#> ── Column specification ────────────────────────────────────────────────────────
+#> Delimiter: ","
+#> chr (76): sekhabtype, terhabtype, pHjord, pHvand, Cijord, Nijord, CNratio, F...
+#> dbl (21): site, plot, year, UTMx, UTMy, fEL, fER, fEN, fAnnualsGrime, fchmax...
+#> 
+#> ℹ Use `spec()` to retrieve the full column specification for this data.
+#> ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+
+
+Habs <- Habs %>% left_join(Species)
+#> Joining, by = "plot"
+
+Habs <- Habs %>%
+    drop_na()
+```
 
 ## Reproducibility ticket:
 

@@ -8,8 +8,11 @@ output: github_document
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment = "#>",
-  cache = T
+  cache = T,
+  tidy=TRUE, tidy.opts=list(arrow=TRUE, indent=2)
 )
+
+library(formatR)
 ```
 
 # MachineLearningModelEnvironment
@@ -30,7 +33,10 @@ library(sf)
 library(DT)
 library(terra)
 library(knitr)
+library(geodata)
 ```
+
+### Novana Dataset
 
 First we will use points from the NOVANA dataset
 
@@ -52,6 +58,9 @@ Habs %>%
   knitr::kable(caption = "Number of plots per major habitat in descending order")
 ```
 
+And data for the 1, and 2 star species number and proportions, plus the Artscore for all of them. In the Next table we can see how the first 20 observations look like:
+
+
 ```{r ResponseVariables}
 Species <- read_csv("Novana/alledata-abiotiske2.csv") %>% dplyr::select("site", "plot", "year", "antalarter", "antalstjernearter", "antaltostjernearter",
   "antalenaarigearter", "meanscore", "andelstjerne", "andeltostjerne") %>%
@@ -62,11 +71,254 @@ Species <- read_csv("Novana/alledata-abiotiske2.csv") %>% dplyr::select("site", 
 Habs <- Habs %>% left_join(Species)
 
 Habs <- Habs %>%
-    drop_na()
+    drop_na() %>% 
+  st_transform(crs = 4326)
+```
+Since every plot can be measured multiple years we have more observations than number of plots with `r nrow(Habs)` observations.
+
+
+```{r, echo = FALSE}
+Habs %>% 
+  as.data.frame() %>% 
+  dplyr::select("plot", "ID", "habtype", "MajorHab", "year", 
+"antalarter", "antalstjernearter", "antaltostjernearter", "antalenaarigearter", 
+"meanscore", "andelstjerne", "andeltostjerne") %>% head(20) %>% 
+  kable
+```
+
+## Predictor variables
+
+### Climate data
+
+First we download the Bioclimatic variables from worldclim for Denmark, and extract the values for that in our points to add to the dataset:
+
+```{r}
+Bio <- geodata::worldclim_country("Denmark", var = "bio", res = 0.5, path = getwd())
+
+
+Habs <- Habs %>% 
+  bind_cols(terra::extract(Bio, vect(Habs))) %>% 
+  drop_na()
+```
+In the next graph we see the first 4 bioclimatic variables:
+
+```{r, echo = F}
+plot(Bio[[c(1:4)]], colNA = "black")
+```
+
+### Soil data:
+
+We will also use Clay, Sand, Silt, Nitrogen, and pH values from Soildgrids, 
+
+```{r}
+Clay <- geodata::soil_world_vsi(var = "clay", stat = "Q0.5", depth = 5) %>% terra::resample(Bio[[1]])
+
+Sand <- geodata::soil_world_vsi(var = "sand", stat = "Q0.5", depth = 5) %>% terra::resample(Bio[[1]])
+
+Silt <- geodata::soil_world_vsi(var = "silt", stat = "Q0.5", depth = 5) %>% terra::resample(Bio[[1]])
+
+Nitro <- geodata::soil_world_vsi(var = "nitrogen", stat = "Q0.5", depth = 5) %>% terra::resample(Bio[[1]])
+
+pH <- geodata::soil_world_vsi(var = "phh2o", stat = "Q0.5", depth = 5) %>% terra::resample(Bio[[1]])
+
+
+Soils <- c(Clay,Sand, Silt, Nitro, pH)
+
+Habs <- Habs %>% 
+  bind_cols(terra::extract(Soils, vect(Habs))) %>% 
+  drop_na()
+```
+
+
+Here we see the layers
+
+```{r}
+plot(Soils, colNA = "black")
+```
+
+After eliminating areas where the predictors are NA we finally have `r nrow(Habs)` observations. In the following table we se the number of observations per major habitat type
+
+
+```{r, echo = F}
+Habs %>% 
+  as.data.frame() %>% 
+  group_by(MajorHab) %>% 
+  summarise(number_of_plots = n()) %>% 
+  arrange(desc(number_of_plots)) %>% 
+  knitr::kable(caption = "Number of observations per major habitat in descending order")
+```
+
+
+```{r, echo = TRUE}
+Habs <- Habs %>% dplyr::select("plot","site", "MajorHab", 
+"year", "antalarter", "antalstjernearter", "antaltostjernearter", 
+"antalenaarigearter", "meanscore", "andelstjerne", "andeltostjerne", "wc2.1_30s_bio_1", "wc2.1_30s_bio_2", "wc2.1_30s_bio_3", 
+"wc2.1_30s_bio_4", "wc2.1_30s_bio_5", "wc2.1_30s_bio_6", "wc2.1_30s_bio_7", 
+"wc2.1_30s_bio_8", "wc2.1_30s_bio_9", "wc2.1_30s_bio_10", "wc2.1_30s_bio_11", 
+"wc2.1_30s_bio_12", "wc2.1_30s_bio_13", "wc2.1_30s_bio_14", "wc2.1_30s_bio_15", 
+"wc2.1_30s_bio_16", "wc2.1_30s_bio_17", "wc2.1_30s_bio_18", "wc2.1_30s_bio_19", "clay_0-5cm_Q0.5", "sand_0-5cm_Q0.5", "silt_0-5cm_Q0.5", 
+"nitrogen_0-5cm_Q0.5", "phh2o_0-5cm_Q0.5", "geometry")
+
+Cols <- Habs %>% colnames() %>% str_remove_all("wc2.1_30s_|_0-5cm_Q0.5") 
+
+colnames(Habs) <- Cols 
+
+Habs <- saveRDS(Habs, "Predictors.rds")
+```
+
+# Modeling
+
+In order to model we will use the `tidymodels` package
+
+```{r}
+library(tidymodels)
+library(spatialsample)
+
+Habs <- readRDS("Predictors.rds")
+
+Coords <- st_coordinates(Habs) %>% 
+  as.data.frame() %>% 
+  set_names(c("Lon", "Lat"))
+
+Habs <- Habs %>% 
+  bind_cols(Coords)
+```
+
+## Lets start building a model for the habitat with the largest datastet
+
+For that we will filter for habitat type 62
+
+```{r}
+Hab_62 <- Habs %>% 
+  dplyr::filter(MajorHab == 62) %>% 
+  mutate_at(c("antalarter", "antalstjernearter", "antaltostjernearter"), as.numeric) %>% 
+  drop_na()
+```
+
+Now we will generate a spatially stratified partition using the `spatialsample` package:
+
+First we will divide on an initial training and testing set with 80% for the training and 20% for the testing set
+
+```{r}
+set.seed(2022)
+Hab_62_split <- initial_split(Hab_62, prop = 0.80, strata = antalstjernearter)
+Hab_62_train <- training(Hab_62_split)
+Hab_62_test  <-  testing(Hab_62_split)
+```
+
+
+As we see the frequency of star species is quite similar in the training and testing set
+
+```{r, echo = FALSE}
+par(mfrow=c(1,2))    # set the plotting area into a 1*2 array
+hist(Hab_62_train$antalstjernearter, main = "Training set", xlab = "Number of star species", freq = F)
+hist(Hab_62_test$antalstjernearter, main = "Test set", xlab = "Number of star species", freq = F)
 ```
 
 
 
+```{r}
+set.seed(2022)
+Folds <- spatial_clustering_cv(as.data.frame(Hab_62_train), coords = c(Lat, Lon), v = 6)
+```
+
+Which can be seen here:
+
+```{r, echo = FALSE}
+DK <- geodata::gadm(country = "denmark", level = 0, path = getwd())  %>% 
+  st_as_sf()
+
+ForPlot <- list()
+
+for(i in 1:nrow(Folds)){
+  ForPlot[[i]] <- assessment(Folds$splits[[i]]) %>%
+  mutate(Fold = paste0("Fold-", i))
+}
+
+ForPlot <- ForPlot %>% 
+  purrr::reduce(bind_rows) %>% 
+  mutate(antaltostjernearter = as.numeric(antaltostjernearter)) %>% 
+  drop_na()
+
+
+ggplot(ForPlot) + 
+  geom_sf(data = DK) +
+    geom_point(aes(Lon, Lat, color = Fold), alpha = 0.5) +
+    labs(color = NULL) +
+    theme_bw()
+```
+
+
+
+## Predicting the number of starspecies for the 
+
+```{r}
+tidymodels_prefer()
+
+brt_model <- parsnip::boost_tree(
+    mode = "regression",
+    trees = 1000,
+    min_n = tune(),
+    tree_depth = tune(),
+    learn_rate = tune(),
+    loss_reduction = tune()
+  ) %>%
+    set_engine("xgboost", objective = "reg:squarederror")
+
+# grid specification
+xgboost_params <- 
+  dials::parameters(
+    min_n(),
+    tree_depth(),
+    learn_rate(),
+    loss_reduction()
+  )
+
+xgboost_grid <- 
+  dials::grid_max_entropy(
+    xgboost_params, 
+    size = 60
+  )
+
+
+brt_wflow <- 
+  workflow() %>% 
+  add_model(brt_model) %>% 
+  add_formula(antaltostjernearter ~ bio_1 +  bio_2 + bio_3 + bio_4 + bio_5 + bio_6 + bio_7 + bio_8 + bio_9 + bio_10 + bio_11 + bio_12 + bio_13 + bio_14 + bio_15 + bio_16 + bio_17 + bio_18 + bio_19 + clay + sand + silt + nitrogen + phh2o + Lon + Lat)
+
+# hyperparameter tuning
+xgboost_tuned <- tune::tune_grid(
+  object = brt_wflow,
+  resamples = Folds,
+  grid = xgboost_grid,
+  metrics = yardstick::metric_set(rmse, rsq, mae),
+  control = tune::control_grid(verbose = TRUE)
+)
+```
+
+
+
+```{r}
+xgboost_tuned %>%
+  tune::show_best(metric = "rmse") %>%
+  knitr::kable()
+```
+
+
+```{r}
+xgboost_best_params <- xgboost_tuned %>%
+  tune::select_best("rmse")
+
+knitr::kable(xgboost_best_params)
+```
+
+
+```{r}
+xgboost_model_final <- brt_model %>% 
+  finalize_model(xgboost_best_params)
+#brt_fit <- fit_resamples(brt_wflow, Folds)
+
+```
 
 ## Reproducibility ticket:
 
